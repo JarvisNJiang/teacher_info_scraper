@@ -17,6 +17,19 @@ from functools import wraps
 from urllib.parse import urljoin
 import time
 
+# from selenium import webdriver
+# from selenium.webdriver.chrome.service import Service
+# from webdriver_manager.chrome import ChromeDriverManager
+# from selenium.webdriver.chrome.options import Options
+
+# chrome_options = Options()
+# chrome_options.add_argument("--headless")
+# chrome_options.add_argument("--no-sandbox")
+# chrome_options.add_argument("--disable-dev-shm-usage")
+
+# driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+
+
 
 main = Blueprint('main', __name__)
 
@@ -65,45 +78,52 @@ def get_best_column_xpath(driver):
 def extract_xpath():
     url = request.args.get('url')
     institute_name = request.args.get('instituteName')
+    enable_pagination = request.args.get('enablePagination', 'false').lower() == 'true'
     
     if not url or not institute_name:
-            return jsonify({"error": "URL and institute name are required"}), 400
+        return jsonify({"error": "URL and institute name are required"}), 400
 
-    def generate(url, institute_name):
+    def generate(url, institute_name, enable_pagination):
         with init_webdriver() as driver:
-            driver.get(url)
-            best_xpath = get_best_column_xpath(driver)
-            
-            if not best_xpath:
-                yield f"data: {json.dumps({'error': '未找到符合条件的XPath'})}\n\n"
-                return
-
-            elements = driver.find_elements(By.XPATH, best_xpath.replace("[.//a and string-length(normalize-space(.)) > 0]", ""))
-            total_elements = len(elements)
-            
-            is_bold = driver.execute_script("""
-                var style = window.getComputedStyle(arguments[0]);
-                return style.getPropertyValue('font-weight') >= 700 || style.getPropertyValue('font-weight') === 'bold';
-            """, elements[0])
-            
-            start_index = 1 if is_bold else 0
             teachers_info = []
+            current_url = url
+            page_number = 1
 
-            for index, element in enumerate(elements[start_index:], start=start_index):
-                name = element.text.strip()
-                if name:
-                    link_element = element.find_elements(By.XPATH, './/a')
-                    url = link_element[0].get_attribute('href') if link_element else ''
-                    teachers_info.append({"name": name, "url": url})
+            while current_url:
+                driver.get(current_url)
+                best_xpath = get_best_column_xpath(driver)
                 
-                progress = (index - start_index + 1) / (total_elements - start_index) * 100
-                yield f"data: {json.dumps({'progress': progress})}\n\n"
-            
+                if not best_xpath:
+                    yield f"data: {json.dumps({'error': '未找到符合条件的XPath'})}\n\n"
+                    return
+
+                elements = driver.find_elements(By.XPATH, best_xpath.replace("[.//a and string-length(normalize-space(.)) > 0]", ""))
+                
+                for element in elements:
+                    name = element.text.strip()
+                    if name:
+                        link_element = element.find_elements(By.XPATH, './/a')
+                        url = link_element[0].get_attribute('href') if link_element else ''
+                        teachers_info.append({"name": name, "url": url})
+                
+                yield f"data: {json.dumps({'progress': f'正在处理第{page_number}页', 'teachers_count': len(teachers_info)})}\n\n"
+                
+                if enable_pagination:
+                    # 检查是否有下一页
+                    next_page = driver.find_elements(By.XPATH, "//a[contains(text(), '下一页') or contains(@class, 'next')]")
+                    if next_page:
+                        current_url = next_page[0].get_attribute('href')
+                        page_number += 1
+                    else:
+                        current_url = None
+                else:
+                    current_url = None  # 如果不启用翻页，只处理第一页
+
             json_filename = save_to_json(institute_name, teachers_info)
             
             yield f"data: {json.dumps({'xpath': best_xpath, 'teachers_info': teachers_info, 'json_file': json_filename})}\n\n"
 
-    return Response(stream_with_context(generate(url, institute_name)), content_type='text/event-stream')
+    return Response(stream_with_context(generate(url, institute_name, enable_pagination)), content_type='text/event-stream')
 
 def save_to_json(institute_name, teachers_info):
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -142,8 +162,9 @@ def extract_custom_xpath():
     url = data.get('url')
     institute_name = data.get('instituteName')
     custom_xpath = data.get('xpath')
+    enable_pagination = data.get('enablePagination', False)
     
-    current_app.logger.info(f"Parsed request: URL={url}, Institute={institute_name}, XPath={custom_xpath}")
+    current_app.logger.info(f"Parsed request: URL={url}, Institute={institute_name}, XPath={custom_xpath}, EnablePagination={enable_pagination}")
     
     if not url or not institute_name or not custom_xpath:
         current_app.logger.error("Missing required parameters")
@@ -157,34 +178,49 @@ def extract_custom_xpath():
 
         try:
             driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-            current_app.logger.info(f"Sending GET request to {url}")
-            driver.get(url)
-            
-            # 等待 XPath 元素加载
-            elements = WebDriverWait(driver, 10).until(
-                EC.presence_of_all_elements_located((By.XPATH, custom_xpath))
-            )
-            
-            current_app.logger.info(f"Found {len(elements)} elements matching the XPath")
-            
-            if not elements:
-                current_app.logger.warning("No elements found matching the XPath")
-                yield f"data: {json.dumps({'error': 'No elements found matching the XPath'})}\n\n"
-                return
-
+            current_url = url
+            page_number = 1
             teachers_info = []
-            for i, element in enumerate(elements):
-                try:
-                    # 使用 JavaScript 获取元素的文本内容
-                    name = driver.execute_script("return arguments[0].innerText;", element).strip()
-                    href = element.get_attribute('href')
-                    if href:
-                        href = urljoin(url, href)
-                    teachers_info.append({'name': name, 'url': href})
-                    yield f"data: {json.dumps({'progress': (i + 1) / len(elements) * 100})}\n\n"
-                except Exception as e:
-                    current_app.logger.error(f"Error processing element {i+1}: {str(e)}", exc_info=True)
-                    yield f"data: {json.dumps({'error': f'Error processing element {i+1}: {str(e)}'})}\n\n"
+
+            while current_url:
+                current_app.logger.info(f"Sending GET request to {current_url}")
+                driver.get(current_url)
+                
+                # 等待 XPath 元素加载
+                elements = WebDriverWait(driver, 10).until(
+                    EC.presence_of_all_elements_located((By.XPATH, custom_xpath))
+                )
+                
+                current_app.logger.info(f"Found {len(elements)} elements matching the XPath")
+                
+                if not elements:
+                    current_app.logger.warning("No elements found matching the XPath")
+                    yield f"data: {json.dumps({'error': 'No elements found matching the XPath'})}\n\n"
+                    return
+
+                for i, element in enumerate(elements):
+                    try:
+                        # 使用 JavaScript 获取元素的文本内容
+                        name = driver.execute_script("return arguments[0].innerText;", element).strip()
+                        href = element.get_attribute('href')
+                        if href:
+                            href = urljoin(current_url, href)
+                        teachers_info.append({'name': name, 'url': href})
+                    except Exception as e:
+                        current_app.logger.error(f"Error processing element {i+1}: {str(e)}", exc_info=True)
+                
+                yield f"data: {json.dumps({'progress': f'正在处理第{page_number}页', 'teachers_count': len(teachers_info)})}\n\n"
+
+                if enable_pagination:
+                    # 检查是否有下一页
+                    next_page = driver.find_elements(By.XPATH, "//a[contains(text(), '下一页') or contains(@class, 'next')]")
+                    if next_page:
+                        current_url = next_page[0].get_attribute('href')
+                        page_number += 1
+                    else:
+                        current_url = None
+                else:
+                    current_url = None  # 如果不启用翻页，只处理第一页
 
             # 保存为 JSON 文件
             json_filename = save_to_json(institute_name, teachers_info)
@@ -199,7 +235,6 @@ def extract_custom_xpath():
 
     current_app.logger.info("Finished extract_custom_xpath function")
     return Response(stream_with_context(generate()), content_type='text/event-stream')
-
 
 
 def save_to_json(institute_name, teachers_info):
