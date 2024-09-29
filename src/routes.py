@@ -11,6 +11,24 @@ import json
 import os
 import logging
 from functools import wraps
+import requests
+from urllib.parse import urljoin
+import json
+from flask import jsonify, Response, stream_with_context
+from lxml import etree
+from flask import current_app, jsonify, request, Response, stream_with_context
+from . import main
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import json
+import time
+from urllib.parse import urljoin
+
 
 main = Blueprint('main', __name__)
 
@@ -126,3 +144,70 @@ def process_all():
         yield "event: done\ndata: Processing completed\n\n"
 
     return Response(stream_with_context(generate()), content_type='text/event-stream')
+
+@main.route('/extract_custom', methods=['POST'])
+def extract_custom_xpath():
+    current_app.logger.info("Starting extract_custom_xpath function")
+    data = request.json
+    current_app.logger.info(f"Received data: {data}")
+    
+    url = data.get('url')
+    institute_name = data.get('instituteName')
+    custom_xpath = data.get('xpath')
+    
+    current_app.logger.info(f"Parsed request: URL={url}, Institute={institute_name}, XPath={custom_xpath}")
+    
+    if not url or not institute_name or not custom_xpath:
+        current_app.logger.error("Missing required parameters")
+        return jsonify({"error": "All parameters (URL, institute name, and XPath) are required"}), 400
+
+    def generate():
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+
+        try:
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+            current_app.logger.info(f"Sending GET request to {url}")
+            driver.get(url)
+            
+            # 等待 XPath 元素加载
+            elements = WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.XPATH, custom_xpath))
+            )
+            
+            current_app.logger.info(f"Found {len(elements)} elements matching the XPath")
+            
+            if not elements:
+                current_app.logger.warning("No elements found matching the XPath")
+                yield f"data: {json.dumps({'error': 'No elements found matching the XPath'})}\n\n"
+                return
+
+            teachers_info = []
+            for i, element in enumerate(elements):
+                try:
+                    name = element.text.strip()
+                    href = element.get_attribute('href')
+                    teachers_info.append({'name': name, 'url': href})
+                    yield f"data: {json.dumps({'progress': (i + 1) / len(elements) * 100})}\n\n"
+                except Exception as e:
+                    current_app.logger.error(f"Error processing element {i+1}: {str(e)}", exc_info=True)
+                    yield f"data: {json.dumps({'error': f'Error processing element {i+1}: {str(e)}'})}\n\n"
+            
+            yield f"data: {json.dumps({'teachers_info': teachers_info})}\n\n"
+            current_app.logger.info("Extraction completed successfully")
+        except Exception as e:
+            current_app.logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+            yield f"data: {json.dumps({'error': f'Unexpected error: {str(e)}'})}\n\n"
+        finally:
+            driver.quit()
+
+    current_app.logger.info("Finished extract_custom_xpath function")
+    return Response(stream_with_context(generate()), content_type='text/event-stream')
+
+@main.route('/custom_xpath')
+def custom_xpath():
+    return render_template('custom_xpath.html')
+
+
