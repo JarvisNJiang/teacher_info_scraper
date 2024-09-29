@@ -25,5 +25,5 @@ env/
 *.tmp
 
 # Outputs
-/人员信息结果/*
-/urls/*
+/src/人员信息结果/*
+/src/urls/*
