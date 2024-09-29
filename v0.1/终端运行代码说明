@@ -1,0 +1,47 @@
+python src/scraper.py C:\Users\jiang\Desktop\University_Scraper "滁州学院" --timeout 2 --max_retries 2 --num_threads 3 --log_level CRITICAL
+python src/scraper.py C:\Users\jiang\Desktop\University_Scraper "中国科学技术大学" --timeout 2 --max_retries 2 --num_threads 5 --log_level INFO
+
+python src/scraper.py C:\Users\jiang\Desktop\University_Scraper "中国科学技术大学" --timeout 3 --max_retries 2 --num_threads 8 --log_level CRITICAL
+python src/scraper.py C:\Users\jiang\Desktop\University_Scraper "中国科学技术大学" --timeout 3 --max_retries 2 --num_threads 8 --log_level INFO
+
+python script_name.py
+
+# 命令解析：
+# python                                        : 调用 Python 解释器
+# src/scraper.py                                : 指定要运行的 Python 脚本文件路径
+# C:\Users\jiang\Desktop\University_Scraper     : 项目的基础目录（必须参数）
+# "中国科学技术大学"                            : 指定要爬取的大学名称（必须参数）
+# --timeout 3                                   : 设置请求超时时间为 3 秒（可选参数，默认值是 30）
+# --max_retries 2                               : 设置最大重试次数为 2 次（可选参数，默认值是 3）
+# --num_threads 8                               : 设置并发线程数为 8（可选参数，默认值是 5）
+# --log_level CRITICAL                          : 设置日志级别为 CRITICAL（可选参数，默认值是 INFO）
+
+# 参数说明：
+# 1. base_dir：项目的基础目录，包含 src, configs 等子目录
+# 2. university_name：要爬取的大学名称，必须与配置文件夹名称相匹配
+# 3. timeout：单个请求的最大等待时间，如果超过这个时间就会触发超时错误
+# 4. max_retries：当请求失败时，最多重试的次数
+# 5. num_threads：同时运行的线程数，用于并行处理多个请求
+# 6. log_level：日志记录的详细程度，从最详细到最简单依次是：
+#    DEBUG > INFO > WARNING > ERROR > CRITICAL
+
+# 注意事项：
+# - 确保 base_dir 路径正确，且包含必要的目录结构（如 src, configs 等）
+# - 确保已经安装了所有必要的 Python 包，包括 requests, beautifulsoup4, tqdm 等
+# - 确保在 configs 目录下创建了名为 "中国科学技术大学" 的文件夹，并包含所有必要的配置文件
+# - 可以根据需要调整参数值：
+#   * 增加 timeout 可以处理较慢的网络连接，但可能会增加总体运行时间
+#   * 增加 max_retries 可以提高成功率，但可能会增加总体运行时间
+#   * 增加 num_threads 可以提高并发性和爬取速度，但要注意不要对目标服务器造成过大压力
+#   * 调整 log_level 可以控制输出信息的详细程度，CRITICAL 级别只会显示最严重的错误信息
+
+# 运行这个命令将会：
+# 1. 验证指定目录下 "中国科学技术大学" 的所有 JSON 配置文件
+# 2. 如果所有配置文件有效，开始爬取过程
+# 3. 使用 8 个并发线程进行爬取
+# 4. 每个请求的超时时间为 3 秒，失败后最多重试 2 次
+# 5. 只输出 CRITICAL 级别的日志信息
+
+# 常见错误处理：
+# 如果遇到 "error: the following arguments are required: base_dir, university_name" 的错误，
+# 请确保您提供了这两个必需的参数，并且它们的顺序正确（先 base_dir，后 university_name）。
