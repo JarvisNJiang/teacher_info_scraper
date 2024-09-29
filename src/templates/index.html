@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>教师链接XPath提取器</title>
+        <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
+    </head>
+    <body>
+        <div class="container">
+            <h1>教师链接XPath提取器</h1>
+            <p class="description">本系统可以帮助您从指定的网页中提取教师信息的XPath，支持批量处理多个学院网站。</p>
+            
+            <div class="section">
+                <h2>输入信息</h2>
+                <p>请在下面的表格中输入学院名称和对应的教师列表网页URL。您可以添加多行以批量处理多个学院。</p>
+                <table id="inputTable">
+                    <thead>
+                        <tr>
+                            <th>学院名称</th>
+                            <th>网页URL</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><input type="text" class="instituteName" placeholder="请输入学院名称"></td>
+                            <td><input type="text" class="urlInput" placeholder="请输入网页URL"></td>
+                            <td>
+                                <button onclick="extractXPath(this)">提取XPath</button>
+                                <button onclick="removeRow(this)">删除</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <button onclick="addRow()">添加行</button>
+                <p class="help-text">提示：您可以点击"添加行"来增加更多学院的信息。</p>
+            </div>
+    
+            <div class="section">
+                <h2>批量操作</h2>
+                <button id="extractAllBtn">提取所有XPath并生成json</button>
+                <p class="help-text">点击此按钮将为所有输入的学院提取XPath。</p>
+                <button id="processAllBtn">处理所有数据并生成excel</button>
+                <p class="help-text">点击此按钮将处理所有已提取的教师信息。这个过程可能需要一些时间，请耐心等待。</p>
+            </div>
+    
+            <div class="section">
+                <h2>处理进度</h2>
+                <div id="progressBar" style="display:none; width: 100%; background-color: #f3f3f3; margin-top: 10px;">
+                    <div id="progressBarFill" style="width: 0%; height: 30px; background-color: #4CAF50; text-align: center; line-height: 30px; color: white;"></div>
+                </div>
+                <div id="sse-progress-container" style="display:none;">
+                    <div id="sse-progress-bar">
+                        <div id="sse-progress"></div>
+                    </div>
+                    <div id="sse-status"></div>
+                </div>
+            </div>
+            <div id="loading" style="display:none;">正在加载...</div>
+            <div class="section">
+                <h2>结果显示</h2>
+                <div id="result"></div>
+                <p class="help-text">提取完成后，结果将显示在这里。您可以复制结果或生成教师信息表格。</p>
+            </div>
+        </div>
+
+    <script>
+        let allTeachersInfo = {};
+    
+        function addRow() {
+            const tbody = document.querySelector('#inputTable tbody');
+            const newRow = tbody.insertRow();
+            newRow.innerHTML = `
+                <td><input type="text" class="instituteName" placeholder="请输入学院名称"></td>
+                <td><input type="text" class="urlInput" placeholder="请输入网页URL"></td>
+                <td>
+                    <button onclick="extractXPath(this)">提取XPath</button>
+                    <button onclick="removeRow(this)">删除</button>
+                </td>
+            `;
+        }
+    
+        function removeRow(button) {
+            const row = button.closest('tr');
+            row.remove();
+        }
+    
+        function extractXPath(button) {
+            console.log('extractXPath function called');
+            console.log('提取XPath按钮被点击');
+            const row = button.closest('tr');
+            const instituteName = row.querySelector('.instituteName').value;
+            const url = row.querySelector('.urlInput').value;
+            if (!url || !instituteName) {
+                alert('请输入学院名称和有效的URL');
+                return;
+            }
+    
+            extractSingleXPath(instituteName, url);
+        }
+    
+        function extractSingleXPath(instituteName, url) {
+            console.log('extractSingleXPath function called', instituteName, url);
+            const resultDiv = document.getElementById('result');
+            const loadingDiv = document.getElementById('loading');
+            const progressBar = document.getElementById('progressBar');
+            const progressBarFill = document.getElementById('progressBarFill');
+            
+            resultDiv.innerHTML = '';
+            loadingDiv.style.display = 'block';
+            progressBar.style.display = 'block';
+            progressBarFill.style.width = '0%';
+            progressBarFill.textContent = '0%';
+    
+            const eventSource = new EventSource('/extract?' + new URLSearchParams({
+                url: url,
+                instituteName: instituteName
+            }));
+    
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.progress) {
+                    const progress = Math.round(data.progress);
+                    progressBarFill.style.width = progress + '%';
+                    progressBarFill.textContent = progress + '%';
+                } else if (data.xpath) {
+                    eventSource.close();
+                    loadingDiv.style.display = 'none';
+                    progressBar.style.display = 'none';
+                    displayResult(instituteName, url, data.xpath);
+                    allTeachersInfo[instituteName] = data.teachers_info;
+                
+                    // 显示生成的JSON文件名
+                     if (data.json_file) {
+                        resultDiv.innerHTML += `<p>${instituteName} 的JSON文件已生成: ${data.json_file}</p>`;
+                    }
+                } else if (data.error) {
+                    eventSource.close();
+                    loadingDiv.style.display = 'none';
+                    progressBar.style.display = 'none';
+                    resultDiv.innerHTML += `<p class="error">${instituteName} 错误: ${data.error}</p>`;
+                }
+            };
+    
+            eventSource.onerror = function(event) {
+                console.error('EventSource error:', event);
+                eventSource.close();
+                loadingDiv.style.display = 'none';
+                progressBar.style.display = 'none';
+                resultDiv.innerHTML += `<p class="error">${instituteName} 错误: 无法连接到服务器</p>`;
+            };
+        }
+    
+        function displayResult(instituteName, url, xpath) {
+            const resultDiv = document.getElementById('result');
+            const result = {
+                "institute_name": instituteName,
+                "teacher_page_urls": [url],
+                "teacher_list_xpath": xpath
+            };
+            const resultJson = JSON.stringify(result, null, 2);
+            resultDiv.innerHTML += `
+                <div>
+                    <h3>${instituteName}</h3>
+                    <pre><code>${resultJson}</code></pre>
+                    <button class="copy-btn" onclick="copyToClipboard('${resultJson.replace(/'/g, "\\'")}')">复制</button>
+                    <button onclick="generateTable('${instituteName}')">生成表格</button>
+                </div>
+            `;
+        }
+    
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('结果已复制到剪贴板');
+            }, (err) => {
+                console.error('无法复制文本: ', err);
+            });
+        }
+    
+        function generateTable(instituteName) {
+            const teachersInfo = allTeachersInfo[instituteName];
+            if (teachersInfo) {
+                createAndDownloadTable(instituteName, teachersInfo);
+            } else {
+                alert('没有找到该学院的教师信息');
+            }
+        }
+    
+        function createAndDownloadTable(instituteName, teachersInfo) {
+            const data = [['教师姓名', '个人网页URL']];
+            
+            teachersInfo.forEach(teacher => {
+                data.push([teacher.name, teacher.url || '']);
+            });
+    
+            const ws = XLSX.utils.aoa_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "教师信息");
+    
+            ws['!cols'] = [
+                {wch: 20},
+                {wch: 50}
+            ];
+    
+            XLSX.writeFile(wb, `${instituteName}教师信息.xlsx`);
+        }
+  
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('extractAllBtn').addEventListener('click', async function() {
+                console.log('提取所有XPath按钮被点击');
+                const rows = document.querySelectorAll('#inputTable tbody tr');
+                const resultDiv = document.getElementById('result');
+                resultDiv.innerHTML = '<h3>批量提取结果：</h3>';
+
+                for (const row of rows) {
+                    const instituteName = row.querySelector('.instituteName').value;
+                    const url = row.querySelector('.urlInput').value;
+                    if (instituteName && url) {
+                        resultDiv.innerHTML += `<p>正在处理 ${instituteName}...</p>`;
+                        await new Promise(resolve => {
+                            extractSingleXPath(instituteName, url);
+                            // 使用 MutationObserver 来检测 resultDiv 的变化，从而确定提取完成
+                            const observer = new MutationObserver((mutations) => {
+                                if (mutations.some(mutation => mutation.addedNodes.length > 0)) {
+                                    observer.disconnect();
+                                    resolve();
+                                }
+                            });
+                            observer.observe(resultDiv, { childList: true });
+                        });
+                    }
+                }
+
+                 resultDiv.innerHTML += '<p>所有XPath提取完成！</p>';
+            });
+
+            document.getElementById('processAllBtn').addEventListener('click', function() {
+                const resultDiv = document.getElementById('result');
+                const sseProgressContainer = document.getElementById('sse-progress-container');
+                const sseProgressBar = document.getElementById('sse-progress');
+                const sseStatusDiv = document.getElementById('sse-status');
+                const processAllBtn = document.getElementById('processAllBtn');
+
+                resultDiv.textContent = '';
+                sseProgressContainer.style.display = 'block';
+                sseProgressBar.style.width = '0%';
+                sseStatusDiv.textContent = '正在开始处理...';
+
+                // 禁用按钮并改变外观
+                processAllBtn.disabled = true;
+                processAllBtn.classList.add('processing');
+                processAllBtn.textContent = '处理中...';
+
+                const eventSource = new EventSource('/process_all');
+
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    console.log('Received data:', data);
+
+                    if (data.status === 'error') {
+                        sseStatusDiv.textContent = `错误: ${data.message}`;
+                        sseStatusDiv.className = 'error';
+                        eventSource.close();
+                        enableButton();
+                    } else if (data.status === 'finished') {
+                        sseStatusDiv.textContent = '处理完成！';
+                        sseStatusDiv.className = 'success';
+                        sseProgressBar.style.width = '100%';
+                        sseProgressBar.textContent = '100%';
+                        eventSource.close();
+                        enableButton();
+                    } else if (data.status === 'processing' || data.status === 'file_completed') {
+                        const progress = (data.current_teacher / data.total_teachers * 100).toFixed(2);
+                        sseProgressBar.style.width = `${progress}%`;
+                        sseProgressBar.textContent = `${progress}%`;
+                        sseStatusDiv.textContent = `正在处理: ${data.file} (${data.progress})`;
+                        sseStatusDiv.className = '';
+                    }
+                };
+
+                eventSource.onerror = function(event) {
+                    console.error('EventSource failed:', event);
+                    sseStatusDiv.textContent = '连接错误，请刷新页面重试。';
+                    sseStatusDiv.className = 'error';
+                    eventSource.close();
+                    enableButton();
+                };
+
+                eventSource.addEventListener('done', function(event) {
+                    console.log('Processing completed');
+                    sseStatusDiv.textContent = '处理完成！';
+                    sseStatusDiv.className = 'success';
+                    sseProgressBar.style.width = '100%';
+                    sseProgressBar.textContent = '100%';
+                    eventSource.close();
+                    enableButton();
+                }, false);
+
+                function enableButton() {
+                    processAllBtn.disabled = false;
+                    processAllBtn.classList.remove('processing');
+                    processAllBtn.textContent = '处理所有数据并生成excel';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
