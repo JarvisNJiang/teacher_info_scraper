@@ -2,32 +2,20 @@ from flask import Blueprint, render_template, request, Response, stream_with_con
 from .utils import contains_chinese
 from src.config import Config, URLS_FOLDER, OUTPUT_FOLDER
 from selenium import webdriver
-from selenium.webdriver.firefox.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from src.teacher_info_processor import process_json_files_with_progress
-import json
-import os
-import logging
-from functools import wraps
-import requests
-from urllib.parse import urljoin
-import json
-from flask import jsonify, Response, stream_with_context
-from lxml import etree
-from flask import current_app, jsonify, request, Response, stream_with_context
-from . import main
-from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+from src.teacher_info_processor import process_json_files_with_progress
+from lxml import etree
 import json
-import time
+import os
+import logging
+from functools import wraps
 from urllib.parse import urljoin
+import time
 
 
 main = Blueprint('main', __name__)
@@ -187,16 +175,22 @@ def extract_custom_xpath():
             teachers_info = []
             for i, element in enumerate(elements):
                 try:
-                    name = element.text.strip()
+                    # 使用 JavaScript 获取元素的文本内容
+                    name = driver.execute_script("return arguments[0].innerText;", element).strip()
                     href = element.get_attribute('href')
+                    if href:
+                        href = urljoin(url, href)
                     teachers_info.append({'name': name, 'url': href})
                     yield f"data: {json.dumps({'progress': (i + 1) / len(elements) * 100})}\n\n"
                 except Exception as e:
                     current_app.logger.error(f"Error processing element {i+1}: {str(e)}", exc_info=True)
                     yield f"data: {json.dumps({'error': f'Error processing element {i+1}: {str(e)}'})}\n\n"
+
+            # 保存为 JSON 文件
+            json_filename = save_to_json(institute_name, teachers_info)
             
-            yield f"data: {json.dumps({'teachers_info': teachers_info})}\n\n"
-            current_app.logger.info("Extraction completed successfully")
+            yield f"data: {json.dumps({'teachers_info': teachers_info, 'json_file': json_filename})}\n\n"
+            current_app.logger.info(f"Extraction completed successfully. JSON saved as {json_filename}")
         except Exception as e:
             current_app.logger.error(f"Unexpected error: {str(e)}", exc_info=True)
             yield f"data: {json.dumps({'error': f'Unexpected error: {str(e)}'})}\n\n"
@@ -206,7 +200,24 @@ def extract_custom_xpath():
     current_app.logger.info("Finished extract_custom_xpath function")
     return Response(stream_with_context(generate()), content_type='text/event-stream')
 
+
+
+def save_to_json(institute_name, teachers_info):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    urls_folder = os.path.join(current_dir, 'urls')
+    os.makedirs(urls_folder, exist_ok=True)
+    
+    # 使用机构名称作为文件名，移除可能的非法字符
+    safe_name = "".join([c for c in institute_name if c.isalnum() or c in (' ', '_')]).rstrip()
+    filename = os.path.join(urls_folder, f"{safe_name}.json")
+    
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(teachers_info, f, ensure_ascii=False, indent=2)
+    
+    return filename
+
 @main.route('/custom_xpath')
+@error_handler
 def custom_xpath():
     return render_template('custom_xpath.html')
 
